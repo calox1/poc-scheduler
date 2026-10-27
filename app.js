@@ -51,6 +51,24 @@ function dbError(e, fallback = 'Something went wrong. Please try again.') {
   toast(e.message || fallback, true);
 }
 
+
+/* In-page confirmation (browser pop-ups are blocked in some embedded browsers). */
+function ask(msg, okLabel = 'Yes, continue') {
+  return new Promise(resolve => {
+    const wrap = document.createElement('div');
+    wrap.className = 'modal-wrap';
+    wrap.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+      <p id="mTitle" style="margin:0 0 18px;font-size:17px">${esc(msg)}</p>
+      <div class="btnrow" style="margin:0;justify-content:flex-end"><button class="btn btn-ghost" type="button" data-a="no">Go back</button><button class="btn" type="button" data-a="yes">${esc(okLabel)}</button></div></div>`;
+    const done = v => { wrap.remove(); document.removeEventListener('keydown', key); resolve(v); };
+    const key = e => { if (e.key === 'Escape') done(false); };
+    wrap.addEventListener('click', e => { if (e.target === wrap) done(false); const b = e.target.closest('[data-a]'); if (b) done(b.dataset.a === 'yes'); });
+    document.addEventListener('keydown', key);
+    document.body.appendChild(wrap);
+    wrap.querySelector('[data-a="yes"]').focus();
+  });
+}
+
 /* ---------- auth ---------- */
 async function boot() {
   const { data: { session } } = await sb.auth.getSession();
@@ -330,7 +348,8 @@ async function unit(tok, id) {
   </aside></div>`;
   $$('[data-act]').forEach(btn => btn.onclick = async () => {
     const msg = { delivered: 'Mark this unit as delivered to the patient?', picked_up: 'Mark this unit as picked up? It goes to the servicing team for turnaround.', cancelled: 'Cancel this booking? The unit becomes free for these dates.' }[btn.dataset.act];
-    if (!confirm(msg)) return;
+    const label = { delivered: 'Mark delivered', picked_up: 'Mark picked up', cancelled: 'Cancel booking' }[btn.dataset.act];
+    if (!(await ask(msg, label))) return;
     const { error } = await sb.from('bookings').update({ status: btn.dataset.act }).eq('id', btn.dataset.id);
     if (error) return dbError(error);
     toast('Updated.'); route();
@@ -385,7 +404,7 @@ async function service(tok) {
     const payload = () => ({ stage: $('#sStage').value, expected_ready_date: $('#sReady').value || null, notes: $('#sNotes').value.trim() || null, ...checks() });
     $('#sSave').onclick = async () => { const { error } = await sb.from('service_records').update(payload()).eq('id', sel.id); if (error) return dbError(error); toast('Saved.'); route(); };
     $('#sRel').onclick = async () => {
-      if (!confirm('Release this unit? It will show as available for booking.')) return;
+      if (!(await ask('Release this unit? It will show as available for booking.', 'Release unit'))) return;
       const { error } = await sb.from('service_records').update({ ...payload(), stage: 'ready', released_at: new Date().toISOString() }).eq('id', sel.id);
       if (error) return dbError(error);
       await sb.from('poc_units').update({ state: 'active' }).eq('id', sel.unit_id).eq('state', 'repair');
@@ -427,7 +446,7 @@ async function admin(tok) {
   $('#addStaff').onsubmit = async e => {
     e.preventDefault(); const f = e.target;
     const email = f.email.value.trim().toLowerCase();
-    if (!email.endsWith('@caloxinc.com') && !confirm(`${email} is not a caloxinc.com address. Add anyway?`)) return;
+    if (!email.endsWith('@caloxinc.com') && !(await ask(`${email} is not a caloxinc.com address. Add anyway?`, 'Add anyway'))) return;
     const { error } = await sb.from('staff_allowlist').insert({ email, full_name: f.full_name.value.trim(), role: f.role.value });
     if (error) return dbError(error); toast('Added.'); route();
   };
