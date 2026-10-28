@@ -165,8 +165,8 @@ async function fleet(tok) {
       <td><a class="mono" href="#unit/${u.id}">${esc(u.serial_number)}</a>${u.airline_approved ? '' : ' <span class="muted" title="Not airline approved">(ground)</span>'}</td>
       <td>${esc(u.model)}</td><td>${pill(u.board_status)}</td>
       <td class="mono">${esc(u.account_code || '—')}</td><td>${esc(u.destination || '—')}</td>
-      <td class="nowrap">${u.depart_date ? fmtShort(u.depart_date) + ' – ' + fmtShort(u.return_date) : '—'}</td>
-      <td>${fmtShort(u.deliver_by)}</td><td>${fmtShort(u.pickup_date)}</td>
+      <td class="nowrap">${u.booking_kind === 'placement' ? 'Since ' + fmtShort(u.deliver_by) : u.depart_date ? fmtShort(u.depart_date) + ' – ' + fmtShort(u.return_date) : '—'}</td>
+      <td>${u.booking_kind === 'placement' ? '—' : fmtShort(u.deliver_by)}</td><td>${u.booking_kind === 'placement' && !u.pickup_date ? 'Open-ended' : fmtShort(u.pickup_date)}</td>
       <td><b>${u.board_status === 'available' ? 'Now' : u.board_status === 'repair' ? 'Not set' : fmtShort(u.expected_ready_date || u.ready_date)}</b></td></tr>`).join('')
       || '<tr><td colspan="9" class="muted" style="text-align:center;padding:28px">No units match.</td></tr>'}
     </tbody></table></div></section>
@@ -185,7 +185,7 @@ async function calendar(tok) {
   const start = S.calStart, DAYS = 21, end = addDays(start, DAYS - 1);
   const [u, b, s] = await Promise.all([
     sb.from('poc_units').select('id, serial_number, model, state').neq('state', 'retired').order('model').order('serial_number'),
-    sb.from('bookings').select('*').neq('status', 'cancelled').lte('deliver_by', end).gte('ready_date', start),
+    sb.from('bookings').select('*').neq('status', 'cancelled').lte('deliver_by', end).or(`ready_date.gte.${start},ready_date.is.null`),
     sb.from('service_records').select('*').is('released_at', null)
   ]);
   if (stale(tok)) return; for (const r of [u, b, s]) if (r.error) return dbError(r.error);
@@ -201,8 +201,13 @@ async function calendar(tok) {
     const manual = s.data.find(r => r.unit_id === unit.id && !r.booking_id);
     if (unit.state === 'repair' && !manual) bars += seg(start, end, 'b-repair', 'Out of service: repair', 'Unit is in repair');
     b.data.filter(x => x.unit_id === unit.id).forEach(x => {
-      bars += seg(x.deliver_by, x.deliver_by, 'b-deliver', 'D', `Deliver to ${x.account_code} by ${fmt(x.deliver_by)}`);
-      bars += seg(addDays(x.deliver_by, 1), addDays(x.pickup_date, -1), 'b-trip', 'Trip: ' + x.destination, `${x.account_code}: ${x.destination}, ${fmt(x.depart_date)} – ${fmt(x.return_date)}`);
+      if (x.kind === 'placement') {
+        bars += seg(x.deliver_by, x.pickup_date ? addDays(x.pickup_date, -1) : end, 'b-trip', 'With patient: ' + x.account_code, `${x.account_code}: ${x.destination}, since ${fmt(x.deliver_by)}${x.pickup_date ? '' : ', open-ended'}`);
+        if (!x.pickup_date) return;
+      } else {
+        bars += seg(x.deliver_by, x.deliver_by, 'b-deliver', 'D', `Deliver to ${x.account_code} by ${fmt(x.deliver_by)}`);
+        bars += seg(addDays(x.deliver_by, 1), addDays(x.pickup_date, -1), 'b-trip', 'Trip: ' + x.destination, `${x.account_code}: ${x.destination}, ${fmt(x.depart_date)} – ${fmt(x.return_date)}`);
+      }
       const late = x.status === 'delivered' && x.pickup_date < today;
       bars += seg(x.pickup_date, x.pickup_date, late ? 'b-late' : 'b-pickup', 'P', `Pick up ${fmt(x.pickup_date)}${late ? ' (overdue)' : ''}`);
       bars += seg(addDays(x.pickup_date, 1), x.ready_date, 'b-hold', 'Turnaround', `Cleaning, service, testing, prep. Ready ${fmt(x.ready_date)}`);
@@ -324,7 +329,14 @@ async function unit(tok, id) {
   const act = k => !can('csr', 'admin') ? '' : k.status === 'reserved'
     ? `<button class="btn" data-act="delivered" data-id="${k.id}" type="button">Mark delivered</button><button class="btn btn-danger" data-act="cancelled" data-id="${k.id}" type="button">Cancel booking</button>`
     : `<button class="btn" data-act="picked_up" data-id="${k.id}" type="button">Mark picked up</button>`;
-  const bookingCard = k => `<section class="card"><h2>${k.status === 'reserved' ? 'Upcoming booking' : 'Out with patient'}</h2>
+  const factGrid = list => list.map(([l, val]) => `<div><div class="muted" style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">${l}</div><b>${val}</b></div>`).join('');
+  const placementCard = k => `<section class="card"><h2>Out with patient</h2>
+    <div class="formgrid">${factGrid([['Account', `<span class="mono">${esc(k.account_code)}</span>`], ['Location', esc(k.destination)], ['With patient since', fmt(k.deliver_by)], ['Expected pickup', k.pickup_date ? fmt(k.pickup_date) : 'Open-ended']])}</div>
+    ${k.notes ? `<p class="muted">${esc(k.notes)}</p>` : ''}
+    ${can('csr', 'admin') ? `<div class="btnrow" style="align-items:flex-end"><label class="f">Expected pickup <small>Optional</small><input type="date" id="plPick" value="${esc(k.pickup_date || '')}"></label>
+      <button class="btn btn-ghost" type="button" id="plPickSave" data-id="${k.id}">Save pickup date</button>
+      <button class="btn" data-act="picked_up" data-id="${k.id}" data-kind="placement" type="button">Mark picked up today</button></div>` : ''}</section>`;
+  const bookingCard = k => k.kind === 'placement' ? placementCard(k) : `<section class="card"><h2>${k.status === 'reserved' ? 'Upcoming booking' : 'Out with patient'}</h2>
     <div class="formgrid">${[['Account', `<span class="mono">${esc(k.account_code)}</span>`], ['Destination', esc(k.destination)], ['Deliver by', fmt(k.deliver_by)], ['Departs', fmt(k.depart_date)], ['Arrives', fmt(k.arrive_date)], ['Returns', fmt(k.return_date)], ['Pick up', fmt(k.pickup_date)], ['Ready again', fmt(k.ready_date)]]
       .map(([l, val]) => `<div><div class="muted" style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">${l}</div><b>${val}</b></div>`).join('')}</div>
     ${k.notes ? `<p class="muted">${esc(k.notes)}</p>` : ''}<div class="btnrow">${act(k)}</div></section>`;
@@ -333,9 +345,18 @@ async function unit(tok, id) {
   <div class="pagehead" style="margin-top:8px"><div><div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center"><h1 class="mono" style="font-weight:500">${esc(x.serial_number)}</h1>${pill(x.board_status)}</div>
     <p class="muted">${esc(x.model)} · ${x.airline_approved ? 'Airline approved' : 'Not airline approved'}</p></div></div>
   <div class="split"><div class="main" style="display:flex;flex-direction:column;gap:20px">
-    ${live.map(bookingCard).join('') || '<section class="card"><h2>No current booking</h2><p class="muted">This unit has no upcoming or active trip.</p></section>'}
+    ${live.map(bookingCard).join('') || (can('csr', 'admin') && x.state === 'active' && !x.service_id ? `<section class="card"><h2>Record unit as out with a patient</h2>
+      <p class="muted" style="margin-top:0">For a unit already with a patient outside a booked trip. It stays out until you mark it picked up.</p>
+      <form id="plForm" autocomplete="off"><div class="formgrid">
+        <label class="f">Account code<input name="account_code" class="mono" required placeholder="CALXXXXX00"></label>
+        <label class="f">Location <small>City or "Home use"</small><input name="destination" required value="Home use"></label>
+        <label class="f">With patient since<input type="date" name="deliver_by" required value="${todayPT()}" max="${todayPT()}"></label>
+        <label class="f">Expected pickup <small>Leave blank if open-ended</small><input type="date" name="pickup_date"></label></div>
+        <label class="f" style="margin-top:12px">Notes <small>Optional. No patient names or medical details.</small><textarea name="notes"></textarea></label>
+        <div class="btnrow"><button class="btn" type="submit">Mark out with patient</button></div></form></section>`
+      : '<section class="card"><h2>No current booking</h2><p class="muted">This unit has no upcoming or active trip.</p></section>')}
     <section class="card" style="padding:0"><h2 style="padding:18px 20px 6px">Trip history</h2><div class="tablebox"><table><thead><tr><th>Trip</th><th>Account</th><th>Destination</th><th>Status</th></tr></thead><tbody>
-      ${past.map(k => `<tr><td>${fmtShort(k.depart_date)} – ${fmtShort(k.return_date)}</td><td class="mono">${esc(k.account_code)}</td><td>${esc(k.destination)}</td><td>${k.status === 'cancelled' ? 'Cancelled' : 'Completed'}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No past trips yet.</td></tr>'}
+      ${past.map(k => `<tr><td>${k.kind === 'placement' ? 'With patient ' + fmtShort(k.deliver_by) + ' – ' + fmtShort(k.pickup_date) : fmtShort(k.depart_date) + ' – ' + fmtShort(k.return_date)}</td><td class="mono">${esc(k.account_code)}</td><td>${esc(k.destination)}</td><td>${k.status === 'cancelled' ? 'Cancelled' : 'Completed'}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No past trips yet.</td></tr>'}
     </tbody></table></div></section></div>
   <aside class="side">
     <section class="card"><h2>Service log</h2>${s.data.map(r => `<div style="padding:8px 0;border-bottom:1px solid var(--gray-100)"><b>${r.released_at ? 'Released' : esc(STAGE[r.stage])}</b>
@@ -350,10 +371,27 @@ async function unit(tok, id) {
     const msg = { delivered: 'Mark this unit as delivered to the patient?', picked_up: 'Mark this unit as picked up? It goes to the servicing team for turnaround.', cancelled: 'Cancel this booking? The unit becomes free for these dates.' }[btn.dataset.act];
     const label = { delivered: 'Mark delivered', picked_up: 'Mark picked up', cancelled: 'Cancel booking' }[btn.dataset.act];
     if (!(await ask(msg, label))) return;
-    const { error } = await sb.from('bookings').update({ status: btn.dataset.act }).eq('id', btn.dataset.id);
+    const patch = { status: btn.dataset.act };
+    if (btn.dataset.kind === 'placement' && btn.dataset.act === 'picked_up') patch.pickup_date = todayPT();
+    const { error } = await sb.from('bookings').update(patch).eq('id', btn.dataset.id);
     if (error) return dbError(error);
     toast('Updated.'); route();
   });
+  const pf = $('#plForm'); if (pf) pf.onsubmit = async e => {
+    e.preventDefault();
+    const v = n => pf.elements[n].value.trim();
+    if (v('deliver_by') > todayPT()) return toast('"With patient since" cannot be in the future. Use Book a trip for future deliveries.', true);
+    if (v('pickup_date') && v('pickup_date') < v('deliver_by')) return toast('Expected pickup must be on or after the start date.', true);
+    const { error } = await sb.from('bookings').insert({
+      unit_id: id, kind: 'placement', status: 'delivered', account_code: v('account_code').toUpperCase(), destination: v('destination'),
+      deliver_by: v('deliver_by'), pickup_date: v('pickup_date') || null, notes: v('notes') || null, created_by: S.session.user.id });
+    if (error) return dbError(error);
+    toast('Unit marked as out with patient.'); route();
+  };
+  const pps = $('#plPickSave'); if (pps) pps.onclick = async () => {
+    const { error } = await sb.from('bookings').update({ pickup_date: $('#plPick').value || null }).eq('id', pps.dataset.id);
+    if (error) return dbError(error); toast('Pickup date saved.'); route();
+  };
   const us = $('#usave'); if (us) us.onclick = async () => {
     const { error } = await sb.from('poc_units').update({ state: $('#ust').value, airline_approved: $('#uair').checked, notes: $('#unotes').value.trim() || null }).eq('id', id);
     if (error) return dbError(error); toast('Unit saved.'); route();
