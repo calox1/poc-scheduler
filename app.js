@@ -9,7 +9,7 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const app = $('#app');
 
-const S = { session: null, profile: null, turnaround: 3, fleetFilter: 'all', fleetQ: '', calStart: null, svcSel: null, booking: null };
+const S = { session: null, profile: null, turnaround: 3, fleetFilter: 'all', fleetQ: '', branch: '', calStart: null, svcSel: null, booking: null };
 let renderToken = 0;
 
 /* ---------- helpers ---------- */
@@ -131,7 +131,7 @@ const GROUPS = {
 async function fleet(tok) {
   const { data, error } = await sb.from('unit_board').select('*').order('model').order('serial_number');
   if (stale(tok)) return; if (error) return dbError(error);
-  const units = data.filter(u => u.board_status !== 'retired');
+  const units = data.filter(u => u.board_status !== 'retired' && (!S.branch || u.branch === S.branch));
   const n = list => units.filter(u => list.includes(u.board_status)).length;
   const today = todayPT();
 
@@ -159,23 +159,26 @@ async function fleet(tok) {
   </div>
   <div class="split"><section class="main card" style="padding:0">
     <div class="toolbar"><div class="chips">${chip('all', 'All units')}${chip('available', 'Available')}${chip('out', 'Scheduled or out')}${chip('action', 'Needs action')}${chip('service', 'In service')}</div>
-      <label class="f">Search<input id="fq" class="mono" placeholder="Serial or account code" value="${esc(S.fleetQ)}" style="width:220px"></label></div>
-    <div class="tablebox"><table><thead><tr><th>Serial</th><th>Model</th><th>Status</th><th>Account</th><th>Destination</th><th>Trip</th><th>Deliver by</th><th>Pick up</th><th>Ready again</th></tr></thead><tbody>
+      ${branchSel('fb')}<label class="f">Search<input id="fq" class="mono" placeholder="Serial or account code" value="${esc(S.fleetQ)}" style="width:220px"></label></div>
+    <div class="tablebox"><table><thead><tr><th>Serial</th><th>Model</th><th>Branch</th><th>Status</th><th>Account</th><th>Destination</th><th>Trip</th><th>Deliver by</th><th>Pick up</th><th>Ready again</th></tr></thead><tbody>
     ${rows.map(u => `<tr>
       <td><a class="mono" href="#unit/${u.id}">${esc(u.serial_number)}</a>${u.airline_approved ? '' : ' <span class="muted" title="Not airline approved">(ground)</span>'}</td>
-      <td>${esc(u.model)}</td><td>${pill(u.board_status)}</td>
+      <td>${esc(u.model)}</td><td>${esc(u.branch || '—')}</td><td>${pill(u.board_status)}</td>
       <td class="mono">${esc(u.account_code || '—')}</td><td>${esc(u.destination || '—')}</td>
       <td class="nowrap">${u.booking_kind === 'placement' ? 'Since ' + fmtShort(u.deliver_by) : u.depart_date ? fmtShort(u.depart_date) + ' – ' + fmtShort(u.return_date) : '—'}</td>
       <td>${u.booking_kind === 'placement' ? '—' : fmtShort(u.deliver_by)}</td><td>${u.booking_kind === 'placement' && !u.pickup_date ? 'Open-ended' : fmtShort(u.pickup_date)}</td>
       <td><b>${u.board_status === 'available' ? 'Now' : u.board_status === 'repair' ? 'Not set' : fmtShort(u.expected_ready_date || u.ready_date)}</b></td></tr>`).join('')
-      || '<tr><td colspan="9" class="muted" style="text-align:center;padding:28px">No units match.</td></tr>'}
+      || '<tr><td colspan="10" class="muted" style="text-align:center;padding:28px">No units match.</td></tr>'}
     </tbody></table></div></section>
     <aside class="side"><section class="card"><h2>Needs action today</h2>${tasks}</section>
       <section class="note"><b style="color:var(--blue-700)">Turnaround rule.</b> After each pickup a unit is held ${S.turnaround} business days for cleaning, service, testing and prep before it can go out again.</section></aside>
   </div>`;
   $$('.chip').forEach(b => b.onclick = () => { S.fleetFilter = b.dataset.f; route(); });
+  bindBranch('fb');
   const fq = $('#fq'); fq.oninput = () => { S.fleetQ = fq.value; clearTimeout(fq._t); fq._t = setTimeout(() => { route(); setTimeout(() => { const e = $('#fq'); if (e) { e.focus(); e.setSelectionRange(e.value.length, e.value.length); } }, 0); }, 250); };
 }
+const branchSel = id => `<label class="f">Branch<select id="${id}"><option value="">All branches</option>${['CA', 'AZ'].map(b => `<option value="${b}" ${S.branch === b ? 'selected' : ''}>${b}</option>`).join('')}</select></label>`;
+const bindBranch = id => { const el = $('#' + id); if (el) el.onchange = () => { S.branch = el.value; route(); }; };
 const kpi = (l, v, c) => `<div class="card kpi"><div class="lab">${l}</div><div class="val" style="color:${c}">${v}</div></div>`;
 
 /* ---------- calendar ---------- */
@@ -184,12 +187,13 @@ async function calendar(tok) {
   if (!S.calStart) S.calStart = addDays(today, -((dow(today) + 6) % 7));
   const start = S.calStart, DAYS = 21, end = addDays(start, DAYS - 1);
   const [u, b, s] = await Promise.all([
-    sb.from('poc_units').select('id, serial_number, model, state').neq('state', 'retired').order('model').order('serial_number'),
+    sb.from('poc_units').select('id, serial_number, model, state, branch').neq('state', 'retired').order('model').order('serial_number'),
     sb.from('bookings').select('*').neq('status', 'cancelled').lte('deliver_by', end).or(`ready_date.gte.${start},ready_date.is.null`),
     sb.from('service_records').select('*').is('released_at', null)
   ]);
   if (stale(tok)) return; for (const r of [u, b, s]) if (r.error) return dbError(r.error);
 
+  if (S.branch) u.data = u.data.filter(x => x.branch === S.branch);
   const days = [...Array(DAYS)].map((_, i) => addDays(start, i));
   const seg = (from, to, cls, label, title) => {
     if (!from || !to || to < start || from > end || to < from) return '';
@@ -215,14 +219,14 @@ async function calendar(tok) {
     s.data.filter(r => r.unit_id === unit.id && !r.booking_id).forEach(r => {
       bars += seg(today, r.expected_ready_date || end, 'b-hold', STAGE[r.stage], `In service. Ready ${fmt(r.expected_ready_date)}`);
     });
-    return `<div class="cal-row"><div class="cal-name"><a class="mono" href="#unit/${unit.id}">${esc(unit.serial_number)}</a><div class="muted" style="font-size:12px">${esc(unit.model)}</div></div>${bars}</div>`;
+    return `<div class="cal-row"><div class="cal-name"><a class="mono" href="#unit/${unit.id}">${esc(unit.serial_number)}</a><div class="muted" style="font-size:12px">${esc(unit.model)}${unit.branch ? ' · ' + unit.branch : ''}</div></div>${bars}</div>`;
   }).join('');
 
   const head = days.map(d => `<div class="cal-day ${d === today ? 'today' : isWknd(d) ? 'wknd' : ''}" style="grid-row:1">${toD(d).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short' })}<b>${toD(d).getUTCDate()}</b></div>`).join('');
   const sw = (cls, l) => `<span><span class="sw bar ${cls}" style="display:inline-block"></span>${l}</span>`;
   app.innerHTML = `
   <div class="pagehead"><div><h1>Scheduling calendar</h1><p class="muted">${fmt(start)} – ${fmt(end)}. Blank days are open to book.</p></div>
-    <div class="btnrow" style="margin:0"><button class="btn btn-ghost" id="cp" type="button">Previous week</button><button class="btn btn-ghost" id="ct" type="button">Today</button><button class="btn btn-ghost" id="cn" type="button">Next week</button>
+    <div class="btnrow" style="margin:0;align-items:flex-end">${branchSel('cb')}<button class="btn btn-ghost" id="cp" type="button">Previous week</button><button class="btn btn-ghost" id="ct" type="button">Today</button><button class="btn btn-ghost" id="cn" type="button">Next week</button>
     ${can('csr', 'admin') ? '<a class="btn" href="#book">Book a trip</a>' : ''}</div></div>
   <div class="legend">${sw('b-deliver', 'Delivery')}${sw('b-trip', 'With patient')}${sw('b-pickup', 'Pickup')}${sw('b-hold', 'Turnaround or service')}${sw('b-repair', 'Out of service')}</div>
   <section class="card tablebox" style="padding:0"><div class="cal">
@@ -231,6 +235,7 @@ async function calendar(tok) {
   $('#cp').onclick = () => { S.calStart = addDays(S.calStart, -7); route(); };
   $('#cn').onclick = () => { S.calStart = addDays(S.calStart, 7); route(); };
   $('#ct').onclick = () => { S.calStart = null; route(); };
+  bindBranch('cb');
 }
 
 /* ---------- book a trip ---------- */
@@ -244,6 +249,7 @@ async function book(tok) {
       <label class="f">Account code<input name="account_code" class="mono" required placeholder="CALXXXXX00"></label>
       <label class="f">Destination<input name="destination" required placeholder="City, state or country"></label>
     </div>
+    <div class="formgrid" style="margin-top:16px"><label class="f">Ship from branch<select name="branch"><option value="">Any branch</option>${['CA', 'AZ'].map(b => `<option value="${b}" ${S.branch === b ? 'selected' : ''}>${b}</option>`).join('')}</select></label></div>
     <label class="check"><input type="checkbox" name="flying" ${B.flying ? 'checked' : ''}> Patient is flying — only offer airline-approved units</label>
     <label class="f">Notes <small>Optional. Do not enter patient names or medical details.</small><textarea name="notes"></textarea></label></section>
     <section class="card"><h2>Travel dates</h2><div class="formgrid">
@@ -277,7 +283,7 @@ async function book(tok) {
     if (n === 'return_date' && v('return_date') && !B.touchedPickup) f.elements.pickup_date.value = firstWeekdayAfter(v('return_date'));
     if (n === 'account_code') e.target.value = e.target.value.toUpperCase();
     if (n === 'flying') B.flying = e.target.checked;
-    if (['depart_date', 'return_date', 'deliver_by', 'pickup_date', 'flying'].includes(n)) resetUnits();
+    if (['depart_date', 'return_date', 'deliver_by', 'pickup_date', 'flying', 'branch'].includes(n)) resetUnits();
     preview();
   });
   const datesOk = () => {
@@ -291,11 +297,12 @@ async function book(tok) {
     if (!datesOk()) return;
     const { data, error } = await sb.rpc('available_units', { p_deliver: v('deliver_by'), p_pickup: v('pickup_date') });
     if (error) return dbError(error);
-    B.units = B.flying ? data.filter(x => x.airline_approved) : data;
+    const br = f.elements.branch.value;
+    B.units = data.filter(x => (!B.flying || x.airline_approved) && (!br || x.branch === br));
     B.pick = null; $('#save').disabled = true; $('#unitsBox').hidden = false;
     $('#unitList').innerHTML = B.units.length ? `<p class="muted" style="margin-top:0">${B.units.length} unit(s) free for the whole window.</p>` + B.units.map(x => `
       <label class="check" style="border:1px solid var(--gray-200);border-radius:6px;padding:8px 12px;margin-bottom:8px">
-      <input type="radio" name="unit" value="${x.id}"><span class="mono" style="min-width:110px">${esc(x.serial_number)}</span><span style="flex:1">${esc(x.model)}</span><span class="muted" style="font-size:13px">${esc(x.notes || '')}</span></label>`).join('')
+      <input type="radio" name="unit" value="${x.id}"><span class="mono" style="min-width:110px">${esc(x.serial_number)}</span><span style="flex:1">${esc(x.model)}${x.branch ? ' · ' + x.branch : ''}</span><span class="muted" style="font-size:13px">${esc(x.notes || '')}</span></label>`).join('')
       : '<p class="muted">No units are free for those dates. Try different dates.</p>';
     $$('input[name=unit]').forEach(r => r.onchange = () => { B.pick = r.value; $('#save').disabled = false; });
   };
@@ -343,7 +350,7 @@ async function unit(tok, id) {
   app.innerHTML = `
   <a href="#fleet" style="font-weight:600;font-size:14px">Back to fleet</a>
   <div class="pagehead" style="margin-top:8px"><div><div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center"><h1 class="mono" style="font-weight:500">${esc(x.serial_number)}</h1>${pill(x.board_status)}</div>
-    <p class="muted">${esc(x.model)} · ${x.airline_approved ? 'Airline approved' : 'Not airline approved'}</p></div></div>
+    <p class="muted">${esc(x.model)}${x.branch ? ' · ' + x.branch + ' branch' : ''} · ${x.airline_approved ? 'Airline approved' : 'Not airline approved'}</p></div></div>
   <div class="split"><div class="main" style="display:flex;flex-direction:column;gap:20px">
     ${live.map(bookingCard).join('') || (can('csr', 'admin') && x.state === 'active' && !x.service_id ? `<section class="card"><h2>Record unit as out with a patient</h2>
       <p class="muted" style="margin-top:0">For a unit already with a patient outside a booked trip. It stays out until you mark it picked up.</p>
@@ -363,6 +370,7 @@ async function unit(tok, id) {
       <div class="muted" style="font-size:14px">${r.released_at ? fmtTs(r.released_at) : 'Updated ' + fmtTs(r.updated_at)}${r.notes ? ' — ' + esc(r.notes) : ''}</div></div>`).join('') || '<p class="muted">No service records yet.</p>'}</section>
     ${can('servicing', 'admin') ? `<section class="card"><h2>Unit settings</h2>
       <label class="f">Unit state<select id="ust">${['active', 'repair', 'retired'].map(o => `<option value="${o}" ${x.state === o ? 'selected' : ''}>${{ active: 'Active', repair: 'Out of service: repair', retired: 'Retired' }[o]}</option>`).join('')}</select></label>
+      <label class="f">Branch<select id="ubr"><option value="">Not set</option>${['CA', 'AZ'].map(b => `<option value="${b}" ${x.branch === b ? 'selected' : ''}>${b}</option>`).join('')}</select></label>
       <label class="check"><input type="checkbox" id="uair" ${x.airline_approved ? 'checked' : ''}> Airline approved</label>
       <label class="f">Notes<textarea id="unotes">${esc(x.notes || '')}</textarea></label>
       <div class="btnrow"><button class="btn" id="usave" type="button">Save</button></div></section>` : (x.notes ? `<section class="card"><h2>Notes</h2><p class="muted" style="margin:0">${esc(x.notes)}</p></section>` : '')}
@@ -393,7 +401,7 @@ async function unit(tok, id) {
     if (error) return dbError(error); toast('Pickup date saved.'); route();
   };
   const us = $('#usave'); if (us) us.onclick = async () => {
-    const { error } = await sb.from('poc_units').update({ state: $('#ust').value, airline_approved: $('#uair').checked, notes: $('#unotes').value.trim() || null }).eq('id', id);
+    const { error } = await sb.from('poc_units').update({ state: $('#ust').value, airline_approved: $('#uair').checked, branch: $('#ubr').value || null, notes: $('#unotes').value.trim() || null }).eq('id', id);
     if (error) return dbError(error); toast('Unit saved.'); route();
   };
 }
@@ -473,6 +481,7 @@ async function admin(tok) {
     <section class="card"><h2>Add a unit to the fleet</h2><form id="addUnit" autocomplete="off"><div class="formgrid">
       <label class="f">Serial number<input name="serial_number" class="mono" required></label><label class="f">Make / model<input name="model" required list="models"></label></div>
       <datalist id="models"><option>OxyGo NEXT</option><option>O2 Concepts OxLife Independence</option><option>O2 Concepts OxLife Liberty 2</option><option>GCE Zen-O lite</option></datalist>
+      <label class="f" style="margin-top:12px">Branch<select name="branch"><option value="CA">CA</option><option value="AZ">AZ</option></select></label>
       <label class="check"><input type="checkbox" name="airline_approved" checked> Airline approved</label>
       <label class="f">Notes<input name="notes"></label><div class="btnrow"><button class="btn" type="submit">Add unit</button></div></form></section></div>
   <aside class="side"><section class="card"><h2>Turnaround</h2><label class="f">Business days after pickup<input type="number" id="ta" min="1" max="15" value="${S.turnaround}"></label>
@@ -490,7 +499,7 @@ async function admin(tok) {
   };
   $('#addUnit').onsubmit = async e => {
     e.preventDefault(); const f = e.target;
-    const { error } = await sb.from('poc_units').insert({ serial_number: f.serial_number.value.trim(), model: f.model.value.trim(), airline_approved: f.airline_approved.checked, notes: f.notes.value.trim() || null });
+    const { error } = await sb.from('poc_units').insert({ serial_number: f.serial_number.value.trim(), model: f.model.value.trim(), airline_approved: f.airline_approved.checked, branch: f.branch.value, notes: f.notes.value.trim() || null });
     if (error) return dbError(error); toast('Unit added.'); f.reset();
   };
   $('#taSave').onclick = async () => {
