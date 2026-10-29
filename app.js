@@ -177,7 +177,7 @@ async function fleet(tok) {
   bindBranch('fb');
   const fq = $('#fq'); fq.oninput = () => { S.fleetQ = fq.value; clearTimeout(fq._t); fq._t = setTimeout(() => { route(); setTimeout(() => { const e = $('#fq'); if (e) { e.focus(); e.setSelectionRange(e.value.length, e.value.length); } }, 0); }, 250); };
 }
-const branchSel = id => `<label class="f">Branch<select id="${id}"><option value="">All branches</option>${['CA', 'AZ'].map(b => `<option value="${b}" ${S.branch === b ? 'selected' : ''}>${b}</option>`).join('')}</select></label>`;
+const branchSel = id => `<label class="f">Branch<select id="${id}"><option value="">All branches</option>${['CAL', 'CAZ'].map(b => `<option value="${b}" ${S.branch === b ? 'selected' : ''}>${b}</option>`).join('')}</select></label>`;
 const bindBranch = id => { const el = $('#' + id); if (el) el.onchange = () => { S.branch = el.value; route(); }; };
 const kpi = (l, v, c) => `<div class="card kpi"><div class="lab">${l}</div><div class="val" style="color:${c}">${v}</div></div>`;
 
@@ -249,7 +249,7 @@ async function book(tok) {
       <label class="f">Account code<input name="account_code" class="mono" required placeholder="CALXXXXX00"></label>
       <label class="f">Destination<input name="destination" required placeholder="City, state or country"></label>
     </div>
-    <div class="formgrid" style="margin-top:16px"><label class="f">Ship from branch<select name="branch"><option value="">Any branch</option>${['CA', 'AZ'].map(b => `<option value="${b}" ${S.branch === b ? 'selected' : ''}>${b}</option>`).join('')}</select></label></div>
+    <div class="formgrid" style="margin-top:16px"><label class="f">Ship from branch<select name="branch"><option value="">Any branch</option>${['CAL', 'CAZ'].map(b => `<option value="${b}" ${S.branch === b ? 'selected' : ''}>${b}</option>`).join('')}</select></label></div>
     <label class="check"><input type="checkbox" name="flying" ${B.flying ? 'checked' : ''}> Patient is flying — only offer airline-approved units</label>
     <label class="f">Notes <small>Optional. Do not enter patient names or medical details.</small><textarea name="notes"></textarea></label></section>
     <section class="card"><h2>Travel dates</h2><div class="formgrid">
@@ -370,7 +370,7 @@ async function unit(tok, id) {
       <div class="muted" style="font-size:14px">${r.released_at ? fmtTs(r.released_at) : 'Updated ' + fmtTs(r.updated_at)}${r.notes ? ' — ' + esc(r.notes) : ''}</div></div>`).join('') || '<p class="muted">No service records yet.</p>'}</section>
     ${can('servicing', 'admin') ? `<section class="card"><h2>Unit settings</h2>
       <label class="f">Unit state<select id="ust">${['active', 'repair', 'retired'].map(o => `<option value="${o}" ${x.state === o ? 'selected' : ''}>${{ active: 'Active', repair: 'Out of service: repair', retired: 'Retired' }[o]}</option>`).join('')}</select></label>
-      <label class="f">Branch<select id="ubr"><option value="">Not set</option>${['CA', 'AZ'].map(b => `<option value="${b}" ${x.branch === b ? 'selected' : ''}>${b}</option>`).join('')}</select></label>
+      <label class="f">Branch<select id="ubr"><option value="">Not set</option>${['CAL', 'CAZ'].map(b => `<option value="${b}" ${x.branch === b ? 'selected' : ''}>${b}</option>`).join('')}</select></label>
       <label class="check"><input type="checkbox" id="uair" ${x.airline_approved ? 'checked' : ''}> Airline approved</label>
       <label class="f">Notes<textarea id="unotes">${esc(x.notes || '')}</textarea></label>
       <div class="btnrow"><button class="btn" id="usave" type="button">Save</button></div></section>` : (x.notes ? `<section class="card"><h2>Notes</h2><p class="muted" style="margin:0">${esc(x.notes)}</p></section>` : '')}
@@ -481,7 +481,7 @@ async function admin(tok) {
     <section class="card"><h2>Add a unit to the fleet</h2><form id="addUnit" autocomplete="off"><div class="formgrid">
       <label class="f">Serial number<input name="serial_number" class="mono" required></label><label class="f">Make / model<input name="model" required list="models"></label></div>
       <datalist id="models"><option>OxyGo NEXT</option><option>O2 Concepts OxLife Independence</option><option>O2 Concepts OxLife Liberty 2</option><option>GCE Zen-O lite</option></datalist>
-      <label class="f" style="margin-top:12px">Branch<select name="branch"><option value="CA">CA</option><option value="AZ">AZ</option></select></label>
+      <label class="f" style="margin-top:12px">Branch<select name="branch"><option value="CAL">CAL</option><option value="CAZ">CAZ</option></select></label>
       <label class="check"><input type="checkbox" name="airline_approved" checked> Airline approved</label>
       <label class="f">Notes<input name="notes"></label><div class="btnrow"><button class="btn" type="submit">Add unit</button></div></form></section></div>
   <aside class="side"><section class="card"><h2>Turnaround</h2><label class="f">Business days after pickup<input type="number" id="ta" min="1" max="15" value="${S.turnaround}"></label>
